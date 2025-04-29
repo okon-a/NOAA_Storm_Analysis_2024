@@ -1,0 +1,212 @@
+---
+title: "In-Depth Analysis of NOAA Storm Events for 2024: Health, Geography, and Seasonality"
+author: "Alyssa Okon"
+date: "2025-04-27"
+output: html_document
+---
+
+# Synopsis
+
+This analysis examines the 2024 NOAA storm database to uncover which storm types have the greatest impact on health, where severe events concentrate geographically, how events vary seasonally, and an additional exploration of property damage. We begin by loading and merging raw detail, location, and fatality CSVs for 2024, applying rigorous cleaning steps. In **Q1**, we identify tornadoes and extreme heat as the leading causes of combined injuries and fatalities, offering context on vulnerability factors. In **Q2**, we map the frequency of top event types across states, revealing hotspots in the South and Midwest—particularly Texas and Oklahoma. **Q3** corrects and visualizes seasonality by extracting event month from the `begin_date_time`, showing clear peaks: thunderstorms in May–July and winter storms in December–January. Finally, in **Q4**, our custom question dives into total and per-event property damage, highlighting hurricanes and flash floods for their outsized economic toll. Each section pairs polished figures with thorough interpretation, ready for presentation to municipal emergency planners.
+
+# Data Processing
+
+We begin by loading required libraries and reading the raw CSVs directly into R. All code chunks echo their contents to ensure full reproducibility.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r load-libraries}
+library(dplyr)      # Data manipulation verbs (filter, summarize, join)
+library(readr)      # Fast CSV import
+library(ggplot2)    # Advanced plotting
+library(lubridate)  # Date/time parsing
+library(stringr)    # String operations
+library(scales)     # Formatting numbers and labels
+```
+
+```{r read-and-join}
+# Read 2024 files (ensure filenames and dates match):
+details    <- read_csv("C:/Users/19all/Desktop/DAT511/StormEvents_details-ftp_v1.0_d2024_c20250401.csv")
+locations  <- read_csv("C:/Users/19all/Desktop/DAT511/StormEvents_locations-ftp_v1.0_d2024_c20250401.csv")
+fatalities <- read_csv("C:/Users/19all/Desktop/DAT511/StormEvents_fatalities-ftp_v1.0_d2024_c20250401.csv")
+
+
+# Standardize names
+names(details)    <- tolower(names(details))
+names(locations)  <- tolower(names(locations))
+names(fatalities) <- tolower(names(fatalities))
+
+# Merge on common 'event_id'. Fatalities may be one-to-many; we sum later.
+storm_raw <- details %>%
+  left_join(locations, by = "event_id") %>%
+  left_join(fatalities, by = "event_id")
+
+# Parse primary date-time column for seasonality
+storm_clean <- storm_raw %>%
+  mutate(
+    begin_dt = ymd_hms(begin_date_time),  # Convert text to POSIXct
+    month = month(begin_dt, label = TRUE, abbr = FALSE),
+    event_type = str_to_title(event_type), # Uniform event type names
+    damage_property = if_else(is.na(damage_property), "0", damage_property)
+  )
+
+# Inspect cleaned data
+dim(storm_clean)
+head(storm_clean, 3)
+```
+
+Data Processing Summary: We begin with raw data integrity and reproducibility in mind. Steps and justifications:
+
+Standardizing Column Names: We convert all column names to lowercase to ensure consistency when referencing variables across datasets and avoid case-sensitivity errors in code.
+
+Joining by event_id: Using left_join, we retain all detail records as the primary dataset, then append location and fatality data. This approach preserves events even when there are no associated location or fatality records, ensuring full coverage of all storms.
+
+Handling One-to-Many Relationships: Fatalities may map multiple records to a single event. We defer aggregation until analysis, allowing us to compute accurate total injuries and deaths by event type without losing granularity.
+
+Parsing Dates for Seasonality: We use lubridate::ymd_hms to convert the begin_date_time text into POSIXct. Extracting month enables robust seasonality plots and avoids string-based month errors.
+
+Normalizing Event Types: Converting event_type to title case ensures uniform category names, preventing mismatches due to inconsistent capitalization (e.g., 'Tornado', 'tornado').
+
+Imputing Missing Damage Values: We replace NA in damage_property with '0' so that numeric parsing does not introduce missingness, enabling complete economic impact calculations.
+
+Next, we examine health impacts using the cleaned and joined data.
+
+# Results
+
+## Q1: Health Impacts by Event Type
+
+We compute total direct and indirect injuries and deaths per event type to rank health risk.
+
+```{r q1-health, fig.height=5, fig.width=8}
+health_summary <- storm_clean %>%
+  group_by(event_type) %>%
+  summarize(
+    injuries = sum(injuries_direct + injuries_indirect, na.rm = TRUE),
+    deaths   = sum(deaths_direct + deaths_indirect, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  mutate(total_health = injuries + deaths) %>%
+  arrange(desc(total_health))
+
+# Bar plot of top 10 event types by combined health impact
+ggplot(slice_head(health_summary, n = 10), aes(x = reorder(event_type, total_health), y = total_health)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Storm Event Types by Combined Injuries and Fatalities (2024)",
+    x = "Event Type", y = "Total Injuries + Deaths"
+  ) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+```
+
+**Analysis:**
+The bar chart reveals that Excessive Heat events dominate health impacts in 2024, exceeding 4,000 combined injuries and fatalities—more than double the toll of Tornadoes, which rank second with just under 2,000 incidents. Flash Floods follow with approximately 1,500 health impacts, while general Heat events account for under 1,000, trailed by Tropical Storms, Thunderstorm Winds, and other hazards.
+The overwhelming impact of heat-related events reflects intensifying summer heatwaves that exacerbate underlying cardiovascular and respiratory conditions. To mitigate these risks, public health agencies should implement comprehensive heat-mitigation strategies: deploy early warning systems, establish community cooling centers, distribute targeted advisories to vulnerable groups (e.g., the elderly, outdoor workers), and ensure adequate power and water access during peak heat periods.
+The significant burden from tornadoes underscores the necessity of wind-resilient infrastructure and community preparedness: reinforce safe rooms and shelters, enforce up-to-date building codes, maintain and test community tornado warning sirens, and conduct regular public drills. Similarly, flash floods and other water-related hazards continue to pose acute mortality and morbidity risks; planners should invest in floodplain management, upgrade stormwater drainage systems, and refine rapid-response flood warning protocols.
+By prioritizing these targeted interventions—heat preparedness, wind-safe shelters, and flood risk controls—municipal and state emergency planners can substantially reduce preventable injuries and deaths associated with the top storm event types.
+.
+
+## Q2: Geographic Distribution of Event Types
+
+We tally the frequency of each event type per state, focusing on the ten most frequent event types nationally, and visualize the distribution.
+
+```{r q2-state, fig.height=6, fig.width=9}
+# Identify top 10 event types by overall count
+top10 <- storm_clean %>%
+  count(event_type) %>%
+  arrange(desc(n)) %>%
+  slice_head(n = 10) %>%
+  pull(event_type)
+
+events_by_state <- storm_clean %>%
+  filter(event_type %in% top10) %>%
+  count(state, event_type)
+
+# Heatmap
+ggplot(events_by_state, aes(x = event_type, y = state, fill = n)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "C") +
+  labs(
+    title = "Frequency of Top 10 Storm Event Types by State (2024)",
+    x = "Event Type", y = "State", fill = "Count"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+    axis.text.y = element_text(size = 6)
+  )
+```
+
+**Analysis:**
+In this heatmap, Texas emerges as a clear outlier, recording the highest counts of both flash floods and hail, reflecting its diverse terrain and frequent severe convective storms. North Carolina also shows elevated flash flood and thunderstorm wind counts, often linked to its humid summer climate and proximity to tropical storm tracks. Across the map, thunderstorm wind is the most pervasive hazard, dominating in states such as Georgia, Florida, Illinois, Kentucky, and Kansas, underscoring the broad reach of convective wind events. Oklahoma leads in tornado occurrences, consistent with its position in Tornado Alley. The heatmap also highlights that drought conditions are most pronounced in Texas and New Mexico, while excessive heat hotspots concentrate in Texas and Oklahoma, mirroring southwestern heatwave vulnerabilities. Once again, understanding these state-specific patterns allows governors and emergency managers to allocate resources strategically: reinforcing flood-control infrastructure in California, expanding tornado shelters and warning systems in Oklahoma, pre-positioning cooling centers and heat-relief services in Texas and Oklahoma, and dispatching rapid-response wind damage teams across the Southeast. Such targeted planning ensures that preparation and mitigation efforts align with each state’s most frequent and impactful hazards.
+
+
+## Q3: Seasonality of Storm Events
+We now look at the top 8 event types over the months in 2024. 
+
+```{r q3-seasonality, fig.height=8, fig.width=10}
+# Prepare monthly counts and identify top 8 event types
+data_monthly <- storm_clean %>%
+  count(month, event_type)
+top8_types <- storm_clean %>%
+  count(event_type) %>%
+  arrange(desc(n)) %>%
+  slice_head(n = 8) %>%
+  pull(event_type)
+season_top8 <- data_monthly %>% filter(event_type %in% top8_types)
+
+# Plot: Combined seasonal trends for top 8 event types
+ggplot(season_top8, aes(x = month, y = n, color = event_type, group = event_type)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Seasonal Trends for Top 8 Storm Event Types (2024)",
+    x = "Month", y = "Number of Events", color = "Event Type"
+  ) +
+  theme_minimal()
+```
+
+**Analysis:**
+Thunderstorm Wind events dominate with a sharp surge from April, peaking at over 4,500 incidents in May, before tapering off by September. This pattern reflects the increased atmospheric instability and convective activity during late spring and early summer. Hail follows a similar but shorter season, also peaking above 3,000 events in May, and declining markedly by June and July, as hail-producing storms become less frequent in midsummer. Flash Floods exhibit a broader summer window, rising in June, peaking around 3,800 in August, driven by intense rainfall and tropical moisture. Tornadoes peak in May as well (around 2,200 events), consistent with Tornado Alley’s climatological spring peak, when the clash of warm, humid Gulf air and cool continental air masses is strongest. Winter Weather events increase in November and December, reaching approximately 1,500 in January before falling back in February, aligning with the cold-season storm track. Drought conditions climb in the fall into early winter, reflecting cumulative precipitation deficits that intensify as the growing season ends. Understanding these monthly rhythms enables planners to allocate resources seasonally: pre-position lightning crews and equipment before thunderstorm season, stockpile de-icing materials and ready snow plows for winter weather, and mobilize flood response teams and shelters ahead of late-summer flash floods. Moreover, public awareness campaigns can be timed to peak just before the high-risk window for each hazard which can help the public prepare at home. 
+
+## Q4: Custom Analysis—Property Damage Patterns
+
+We convert `damage_property` strings into numeric USD values to examine per-event economic impact.
+
+```{r q4-property, fig.height=7, fig.width=6}
+# Parse and convert damage_property to numeric
+prop_data <- storm_clean %>%
+  mutate(
+    amount = parse_number(damage_property),
+    multiplier = case_when(
+      str_detect(damage_property, "K") ~ 1e3,
+      str_detect(damage_property, "M") ~ 1e6,
+      TRUE ~ 1
+    ),
+    damage_usd = amount * multiplier
+  )
+
+# Summarize total damage by event type and filter top 6
+damage_summary <- prop_data %>%
+  group_by(event_type) %>%
+  summarize(total_damage = sum(damage_usd, na.rm = TRUE)) %>%
+  arrange(desc(total_damage))
+
+# Plot: Top 6 event types by total property damage
+ggplot(slice_head(damage_summary, n = 6), aes(x = reorder(event_type, total_damage), y = total_damage / 1e6)) +
+  geom_col(fill = "purple") +
+  coord_flip() +
+  labs(
+    title = "Top 6 Event Types by Total Property Damage (2024)",
+    x = "Event Type", y = "Damage (Million USD)"
+  ) +
+  scale_y_continuous(labels = dollar_format(prefix = "$")) +
+  theme_minimal()
+```
+
+**Analysis:**
+Flash floods emerge as the dominant economic threat in 2024, inflicting over $20 million in property damage—more than double the losses from any other event type. This outsized impact reflects their dual nature of high frequency and extreme intensity. Sudden, heavy downpours often overwhelm urban drainage and rural floodplains alike, inundating homes, businesses, and infrastructure with minimal advance warning. Watertight surfaces in urbanized areas exacerbate runoff, while saturated soils in rural regions contribute to rapid riverine and flash flooding, amplifying property losses across diverse landscapes. Tornadoes rank second with approximately $8 million in damages, their narrow but ferocious wind paths demolishing structures at high speeds. Tropical storms closely follow behind in terms of property damage costs. Their expansive wind fields and storm surge producing widespread coastal and inland flooding. The steep decline in losses beyond these top three categories underscores how water-driven hazards can impose impose the largest economic burdens. Once again, municpalities should take these trends into account when allocating resources and planning for major weather events because it can not only reduce property damage costs, but save lives. 
+
+
